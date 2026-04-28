@@ -135,16 +135,16 @@ jobs:
         run: |
           Write-Host "Downloading Vulkan SDK ${{ env.VULKAN_VERSION }}"
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/vulkansdk-windows-X64-${{ env.VULKAN_VERSION }}.exe"
-          
+
           Write-Host "Installing Vulkan SDK silently..."
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
-          
+
           # Set environment variables for subsequent steps
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${{ env.VULKAN_VERSION }}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${{ env.VULKAN_VERSION }}\bin"
-          
+
           Write-Host "Vulkan SDK installed at: C:\VulkanSDK\${{ env.VULKAN_VERSION }}"
-          
+
           # Verify installation
           $vulkaninfoPath = "C:\VulkanSDK\${{ env.VULKAN_VERSION }}\bin\vulkaninfo.exe"
           if (Test-Path $vulkaninfoPath) {
@@ -187,26 +187,8 @@ jobs:
           call "%VS_INSTALL_PATH%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64
           cmake --build build --config Release -j %NUMBER_OF_PROCESSORS%
 
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/feat/ci' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Get commit count
-        id: commit_count
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/feat/ci' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          echo "count=$(git rev-list --count HEAD)" >> $env:GITHUB_OUTPUT
-
-      - name: Fetch system info
-        id: system-info
-        run: |
-          echo "CPU_ARCH=x64" >> $env:GITHUB_OUTPUT
-          echo "OS_TYPE=Windows" >> $env:GITHUB_OUTPUT
-
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/feat/ci' ) || github.event.inputs.create_release == 'true' }}
         run: |
           $filePath = ".\build\bin\Release\*"
           if (Test-Path $filePath) {
@@ -224,20 +206,19 @@ jobs:
             Get-ChildItem .\build\bin\ -Recurse | Select-Object FullName
             throw "Can't find stable-diffusion binaries"
           }
-          
-          $archiveName = "sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-vulkan-llvm-x64.zip"
+
+          $archiveName = "sd-win-vulkan-llvm-x64.zip"
           Write-Host "Creating archive: $archiveName"
           7z a -tzip "$archiveName" $sourcePath
-          
+
           $archiveSize = (Get-Item $archiveName).Length / 1MB
           Write-Host "Archive created: $archiveName ($([math]::Round($archiveSize, 2)) MB)"
           Add-Content $env:GITHUB_ENV "ARTIFACT_ARCHIVE=$archiveName"
 
       - name: Upload build artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/feat/ci' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-vulkan-llvm-x64
+          name: sd-win-vulkan-llvm-x64-${{ github.run_number }}
           path: ${{ env.ARTIFACT_ARCHIVE }}
           retention-days: 7
           if-no-files-found: warn
@@ -251,66 +232,3 @@ jobs:
             build/Testing/Temporary/
             build/*.log
           retention-days: 14
-
-  release:
-    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/feat/ci' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
-    needs: [windows-latest-vulkan-llvm]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Download artifacts
-        id: download-artifact
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifact
-          pattern: sd-*
-          merge-multiple: true
-
-      - name: Get commit count
-        id: commit_count
-        run: |
-          echo "count=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Get commit hash
-        id: commit
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Create release
-        id: create_release
-        uses: anzz1/action-create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
-
-      - name: Upload release assets
-        id: upload_release
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const path = require('path');
-            const fs = require('fs');
-            const release_id = '${{ steps.create_release.outputs.id }}';
-            const artifactDir = './artifact';
-            
-            for (let file of fs.readdirSync(artifactDir)) {
-              const filePath = path.join(artifactDir, file);
-              const ext = path.extname(file).toLowerCase();
-              
-              if (ext === '.zip' || ext === '.7z') {
-                console.log('Uploading release asset:', file);
-                await github.rest.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: release_id,
-                  name: file,
-                  data: fs.readFileSync(filePath)
-                });
-              }
-            }
